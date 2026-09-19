@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Algorithmic Art</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root { --bg:#faf9f5; --ink:#141413; --muted:#8a887e; --line:#e8e6dc; --orange:#d97757; --blue:#6a9bcc; --green:#788c5d; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); padding:12px; }
+.layout { display:flex; gap:12px; max-width:1200px; margin:0 auto; }
+.side { width:300px; background:#fff; padding:14px; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+.canvas-area { flex:1; display:flex; flex-direction:column; align-items:center; gap:8px; }
+.canvas-wrap { width:100%; max-width:600px; aspect-ratio:1/1; border-radius:8px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.12); background:#fff; }
+.canvas-wrap canvas { width:100% !important; height:100% !important; }
+h1 { font-size:18px; margin-bottom:6px; }
+.tabs { display:flex; gap:4px; margin-bottom:14px; background:var(--bg); padding:4px; border-radius:6px; }
+.tab { flex:1; padding:8px; border:none; background:transparent; color:var(--muted); cursor:pointer; font-size:12px; border-radius:4px; }
+.tab.active { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,0.1); }
+.section { margin-bottom:14px; }
+.section h3 { font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); margin-bottom:8px; }
+input[type=number], input[type=range] { width:100%; padding:8px; border:1px solid var(--line); border-radius:4px; font-family:monospace; }
+input[type=range] { padding:0; height:4px; }
+.ctrl { margin-bottom:10px; }
+.ctrl label { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+.ctrl label .v { font-family:monospace; color:var(--muted); }
+.btn { background:var(--orange); color:#fff; border:none; padding:10px; border-radius:6px; font-size:13px; cursor:pointer; width:100%; margin-bottom:6px; }
+.btn.sec { background:var(--blue); }
+.btn.ter { background:var(--green); }
+.btn.gho { background:var(--bg); color:var(--ink); border:1px solid var(--line); }
+.row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.colors { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.colors input[type=color] { width:100%; height:32px; border:1px solid var(--line); border-radius:4px; padding:0; }
+@media (max-width:760px) { .layout { flex-direction:column; } .side { width:100%; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="side">
+<h1>Algorithmic Art</h1>
+<div style="color:var(--muted);font-size:12px;margin-bottom:14px">p5.js + OpenRouter</div>
+<div class="tabs">
+<button class="tab active" data-algo="flowfield" onclick="switchAlgo('flowfield')">Flow Field</button>
+<button class="tab" data-algo="harmonics" onclick="switchAlgo('harmonics')">Harmonics</button>
+</div>
+<div class="section">
+<h3>Seed</h3>
+<input type="number" id="seed" value="12345" min="1" onchange="onSeed()" style="margin-bottom:6px">
+<div class="row">
+<button class="btn sec" onclick="prevSeed()">Prev</button>
+<button class="btn sec" onclick="nextSeed()">Next</button>
+</div>
+<button class="btn ter" onclick="randSeed()">Random</button>
+</div>
+<div class="section">
+<h3>Parameters</h3>
+<div id="params"></div>
+</div>
+<div class="section">
+<h3>Palette</h3>
+<div class="colors">
+<input type="color" id="c1" value="#d97757" onchange="onColor()">
+<input type="color" id="c2" value="#6a9bcc" onchange="onColor()">
+<input type="color" id="c3" value="#788c5d" onchange="onColor()">
+</div>
+</div>
+<div class="section">
+<button class="btn gho" onclick="resetParams()">Reset</button>
+<div class="row">
+<button class="btn" onclick="savePNG()">Save PNG</button>
+<button class="btn ter" onclick="shareTG()">Share TG</button>
+</div>
+</div>
+</aside>
+<main class="canvas-area">
+<div class="canvas-wrap" id="wrap"></div>
+<div style="font-family:monospace;font-size:11px;color:var(--muted)" id="meta">algo: Flow Field | seed: 12345 | fps: --</div>
+</main>
+</div>
+<script>
+'use strict';
+const tg = window.Telegram && window.Telegram.WebApp || null;
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#faf9f5'); } catch(e){} }
+let curAlgo = 'flowfield';
+const DEF = {
+  flowfield: { seed:12345, particleCount:3000, flowSpeed:1.2, noiseScale:0.0035, trailFade:0.04, lineWeight:1.2, noiseOctaves:3, c1:'#d97757', c2:'#6a9bcc', c3:'#788c5d' },
+  harmonics: { seed:7777, gridSize:80, frequency:0.18, phaseSpeed:0.04, decay:0.6, dotSize:4, contrast:1.0, c1:'#d97757', c2:'#6a9bcc', c3:'#141413' }
+};
+const PARAMS = {
+  flowfield: [
+    {k:'particleCount', l:'Particles', min:500, max:8000, step:100, f:v=>Math.round(v)},
+    {k:'flowSpeed', l:'Speed', min:0.2, max:3.0, step:0.1, f:v=>(+v).toFixed(1)},
+    {k:'noiseScale', l:'Noise', min:0.001, max:0.012, step:0.0005, f:v=>(+v).toFixed(4)},
+    {k:'trailFade', l:'Fade', min:0.01, max:0.20, step:0.005, f:v=>(+v).toFixed(3)},
+    {k:'lineWeight', l:'Weight', min:0.3, max:3.0, step:0.1, f:v=>(+v).toFixed(1)},
+    {k:'noiseOctaves', l:'Octaves', min:1, max:5, step:1, f:v=>Math.round(v)}
+  ],
+  harmonics: [
+    {k:'gridSize', l:'Grid', min:30, max:140, step:2, f:v=>Math.round(v)},
+    {k:'frequency', l:'Freq', min:0.05, max:0.45, step:0.01, f:v=>(+v).toFixed(2)},
+    {k:'phaseSpeed', l:'Phase', min:0, max:0.15, step:0.005, f:v=>(+v).toFixed(3)},
+    {k:'decay', l:'Decay', min:0.1, max:1.5, step:0.05, f:v=>(+v).toFixed(2)},
+    {k:'dotSize', l:'Dot', min:1, max:10, step:0.5, f:v=>(+v).toFixed(1)},
+    {k:'contrast', l:'Contr', min:0.3, max:2.5, step:0.1, f:v=>(+v).toFixed(1)}
+  ]
+};
+let p = JSON.parse(JSON.stringify(DEF[curAlgo]));
+let particles = [], flowField = [], cols=0, rows=0;
+const SCL = 12;
+let lastFps = 0, fpsAcc = 0, fpsCnt = 0;
+let needsRegen = false;
+let hGrid = [], hT = 0;
+function hexToRgb(h) { const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h); return m ? {r:parseInt(m[1],16),g:parseInt(m[2],16),b:parseInt(m[3],16)} : {r:0,g:0,b:0}; }
+function lerpC(a,b,t) { return {r:a.r+(b.r-a.r)*t, g:a.g+(b.g-a.g)*t, b:a.b+(b.b-a.b)*t}; }
+function applyUrl() {
+  const sp = new URLSearchParams(window.location.search);
+  const seed = sp.get('seed'), algo = sp.get('algo');
+  if (algo === 'flowfield' || algo === 'harmonics') { curAlgo = algo; p = JSON.parse(JSON.stringify(DEF[algo])); }
+  if (seed && !isNaN(parseInt(seed,10))) p.seed = parseInt(seed,10);
+  for (const [k,v] of sp.entries()) {
+    if (k.startsWith('p_') && k.slice(2) in p) { const n = parseFloat(v); if (!isNaN(n)) p[k.slice(2)] = n; }
+  }
+  for (let i=1; i<=3; i++) { const c = sp.get('c'+i); if (c) p['c'+i] = '#' + c.replace('#',''); }
+}
+function setup() {
+  const c = createCanvas(1000, 1000);
+  c.parent('wrap');
+  pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
+  applyUrl();
+  syncUi();
+  regen();
+}
+function draw() {
+  if (needsRegen) { needsRegen = false; regen(); }
+  if (curAlgo === 'flowfield') drawFF(); else drawH();
+  fpsAcc += deltaTime; fpsCnt++;
+  if (millis() - lastFps > 500) {
+    const avg = fpsAcc / fpsCnt;
+    document.getElementById('meta').textContent = 'algo: ' + (curAlgo === 'flowfield' ? 'Flow Field' : 'Harmonics') + ' | seed: ' + p.seed + ' | fps: ' + (avg > 0 ? Math.round(1000/avg) : 0);
+    fpsAcc = 0; fpsCnt = 0; lastFps = millis();
+  }
+}
+function regen() {
+  randomSeed(p.seed); noiseSeed(p.seed);
+  if (curAlgo === 'flowfield') initFF(); else initH();
+  background(250, 249, 245);
+}
+function initFF() {
+  cols = Math.floor(width / SCL);
+  rows = Math.floor(height / SCL);
+  flowField = new Array(cols * rows);
+  noiseDetail(p.noiseOctaves, 0.5);
+  for (let y=0; y<rows; y++) for (let x=0; x<cols; x++) {
+    flowField[y*cols+x] = noise(x*p.noiseScale, y*p.noiseScale, p.seed*0.001) * TAU * 2;
+  }
+  particles = [];
+  for (let i=0; i<p.particleCount; i++) particles.push(new Particle());
+  background(250, 249, 245);
+}
+class Particle {
+  constructor() {
+    this.pos = createVector(random(width), random(height));
+    this.vel = createVector(0,0); this.acc = createVector(0,0);
+    this.maxSpeed = p.flowSpeed; this.prev = this.pos.copy();
+    const r = random(); this.colorIdx = r < 0.5 ? 0 : (r < 0.85 ? 1 : 2);
+    this.life = random(100, 400);
+  }
+  follow(f) {
+    const x = Math.floor(this.pos.x / SCL), y = Math.floor(this.pos.y / SCL);
+    const idx = y*cols+x;
+    if (idx >= 0 && idx < f.length) { const a = f[idx]; this.acc.add(cos(a)*0.2, sin(a)*0.2); }
+  }
+  update() {
+    this.prev.set(this.pos.x, this.pos.y);
+    this.vel.add(this.acc); this.vel.limit(this.maxSpeed);
+    this.pos.add(this.vel); this.acc.mult(0); this.life--;
+    if (this.life <= 0 || this.pos.x < 0 || this.pos.x > width || this.pos.y < 0 || this.pos.y > height) this.respawn();
+  }
+  respawn() {
+    this.pos.set(random(width), random(height));
+    this.prev.set(this.pos.x, this.pos.y); this.vel.set(0,0);
+    this.life = random(100, 400);
+  }
+  display() {
+    const cs = [p.c1, p.c2, p.c3]; const c = hexToRgb(cs[this.colorIdx]);
+    const sp = this.vel.mag();
+    const al = map(sp, 0, p.flowSpeed, 30, 180);
+    stroke(c.r, c.g, c.b, al); strokeWeight(p.lineWeight);
+    line(this.prev.x, this.prev.y, this.pos.x, this.pos.y);
+  }
+}
+function drawFF() {
+  noStroke(); fill(250, 249, 245, p.trailFade * 255); rect(0, 0, width, height);
+  for (let i=0; i<particles.length; i++) {
+    const pt = particles[i]; pt.follow(flowField); pt.update(); pt.display();
+  }
+}
+function initH() {
+  const n = p.gridSize; hGrid = [];
+  for (let y=0; y<n; y++) { hGrid[y] = []; for (let x=0; x<n; x++) {
+    hGrid[y][x] = { basePhase: (x+y) * p.frequency * TAU };
+  }}
+  hT = 0;
+  background(250, 249, 245);
+}
+function drawH() {
+  noStroke(); fill(250, 249, 245, 25); rect(0, 0, width, height);
+  hT += p.phaseSpeed;
+  const n = p.gridSize, cellW = width / n;
+  const c1 = hexToRgb(p.c1), c2 = hexToRgb(p.c2), c3 = hexToRgb(p.c3);
+  noStroke();
+  for (let y=0; y<n; y++) for (let x=0; x<n; x++) {
+    const dx = (x - n/2) / n, dy = (y - n/2) / n;
+    const distC = Math.sqrt(dx*dx + dy*dy);
+    const w = Math.sin(hT*TAU + distC*12 + hGrid[y][x].basePhase) * Math.cos((dx-dy)*4 + hT*TAU*0.7) * Math.exp(-distC * p.decay * 3);
+    const amp = Math.max(-1, Math.min(1, w * p.contrast));
+    const t = (amp + 1) / 2;
+    const col = t < 0.5 ? lerpC(c1, c2, t*2) : lerpC(c2, c3, (t-0.5)*2);
+    const r = Math.max(0.5, p.dotSize * (0.4 + Math.abs(amp) * 0.8));
+    const al = 120 + amp * 100;
+    fill(col.r, col.g, col.b, al);
+    circle(x*cellW + cellW/2, y*cellW + cellW/2, r*2);
+  }
+}
+function syncUi() {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.algo === curAlgo));
+  renderParams();
+  document.getElementById('c1').value = p.c1;
+  document.getElementById('c2').value = p.c2;
+  document.getElementById('c3').value = p.c3;
+  document.getElementById('seed').value = p.seed;
+}
+function switchAlgo(a) {
+  if (a === curAlgo) return;
+  curAlgo = a; p = JSON.parse(JSON.stringify(DEF[a]));
+  syncUi(); needsRegen = true;
+}
+function renderParams() {
+  const c = document.getElementById('params');
+  c.innerHTML = '';
+  PARAMS[curAlgo].forEach(d => {
+    const v = p[d.k];
+    const div = document.createElement('div');
+    div.className = 'ctrl';
+    div.innerHTML = '<label>' + d.l + '<span class="v" id="v-' + d.k + '">' + d.f(v) + '</span></label>' +
+      '<input type="range" min="' + d.min + '" max="' + d.max + '" step="' + d.step + '" value="' + v + '" oninput="onParam(\'' + d.k + '\', this.value)">';
+    c.appendChild(div);
+  });
+}
+function onParam(k, v) {
+  const d = PARAMS[curAlgo].find(x => x.k === k);
+  const n = parseFloat(v);
+  p[k] = n;
+  document.getElementById('v-' + k).textContent = d.f(n);
+  if (['particleCount','noiseOctaves','gridSize','frequency'].indexOf(k) !== -1) needsRegen = true;
+}
+function onSeed() {
+  const v = parseInt(document.getElementById('seed').value, 10);
+  if (v && v > 0) { p.seed = v; needsRegen = true; } else document.getElementById('seed').value = p.seed;
+}
+function prevSeed() { p.seed = Math.max(1, p.seed - 1); document.getElementById('seed').value = p.seed; needsRegen = true; }
+function nextSeed() { p.seed += 1; document.getElementById('seed').value = p.seed; needsRegen = true; }
+function randSeed() { p.seed = Math.floor(Math.random() * 999999) + 1; document.getElementById('seed').value = p.seed; needsRegen = true; }
+function onColor() { p.c1 = document.getElementById('c1').value; p.c2 = document.getElementById('c2').value; p.c3 = document.getElementById('c3').value; }
+function resetParams() { p = JSON.parse(JSON.stringify(DEF[curAlgo])); syncUi(); needsRegen = true; }
+function savePNG() { saveCanvas('art-' + curAlgo + '-' + p.seed, 'png'); }
+async function shareTG() {
+  try {
+    const c = document.querySelector('#wrap canvas');
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    const file = new File([blob], 'art.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files:[file] })) {
+      await navigator.share({ files:[file], title: 'Algorithmic Art', text: 'algo: ' + curAlgo + ' seed: ' + p.seed });
+      return;
+    }
+    if (tg && tg.sendData) { tg.sendData(JSON.stringify({ algo: curAlgo, seed: p.seed, p: p })); return; }
+    await navigator.clipboard.writeText(window.location.href);
+  } catch(e) {}
+}
+</script>
+</body>
+</html>
