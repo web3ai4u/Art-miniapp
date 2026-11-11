@@ -44,6 +44,7 @@ input[type=range] { padding:0; height:4px; }
 <div class="tabs">
 <button class="tab active" data-algo="flowfield" onclick="switchAlgo('flowfield')">Flow Field</button>
 <button class="tab" data-algo="harmonics" onclick="switchAlgo('harmonics')">Harmonics</button>
+<button class="tab" data-algo="particles" onclick="switchAlgo('particles')">Particles</button>
 </div>
 <div class="section">
 <h3>Seed</h3>
@@ -86,7 +87,8 @@ if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#faf9f5'); } catch(e
 let curAlgo = 'flowfield';
 const DEF = {
   flowfield: { seed:12345, particleCount:3000, flowSpeed:1.2, noiseScale:0.0035, trailFade:0.04, lineWeight:1.2, noiseOctaves:3, c1:'#d97757', c2:'#6a9bcc', c3:'#788c5d' },
-  harmonics: { seed:7777, gridSize:80, frequency:0.18, phaseSpeed:0.04, decay:0.6, dotSize:4, contrast:1.0, c1:'#d97757', c2:'#6a9bcc', c3:'#141413' }
+  harmonics: { seed:7777, gridSize:80, frequency:0.18, phaseSpeed:0.04, decay:0.6, dotSize:4, contrast:1.0, c1:'#d97757', c2:'#6a9bcc', c3:'#141413' },
+  particles: { seed:2048, particleCount:1400, particleSize:2.4, particleSpeed:1.6, gravity:0.12, drift:0.28, spread:1.3, trailFade:0.10, c1:'#f97316', c2:'#38bdf8', c3:'#a3e635' }
 };
 const PARAMS = {
   flowfield: [
@@ -104,6 +106,15 @@ const PARAMS = {
     {k:'decay', l:'Decay', min:0.1, max:1.5, step:0.05, f:v=>(+v).toFixed(2)},
     {k:'dotSize', l:'Dot', min:1, max:10, step:0.5, f:v=>(+v).toFixed(1)},
     {k:'contrast', l:'Contr', min:0.3, max:2.5, step:0.1, f:v=>(+v).toFixed(1)}
+  ],
+  particles: [
+    {k:'particleCount', l:'Particles', min:200, max:4000, step:50, f:v=>Math.round(v)},
+    {k:'particleSize', l:'Size', min:0.8, max:6.0, step:0.2, f:v=>(+v).toFixed(1)},
+    {k:'particleSpeed', l:'Speed', min:0.2, max:4.0, step:0.1, f:v=>(+v).toFixed(1)},
+    {k:'gravity', l:'Gravity', min:0.00, max:0.80, step:0.02, f:v=>(+v).toFixed(2)},
+    {k:'drift', l:'Drift', min:0.00, max:1.50, step:0.05, f:v=>(+v).toFixed(2)},
+    {k:'spread', l:'Spread', min:0.2, max:3.0, step:0.1, f:v=>(+v).toFixed(1)},
+    {k:'trailFade', l:'Fade', min:0.02, max:0.25, step:0.01, f:v=>(+v).toFixed(2)}
   ]
 };
 let p = JSON.parse(JSON.stringify(DEF[curAlgo]));
@@ -112,12 +123,13 @@ const SCL = 12;
 let lastFps = 0, fpsAcc = 0, fpsCnt = 0;
 let needsRegen = false;
 let hGrid = [], hT = 0;
+let sandParticles = [];
 function hexToRgb(h) { const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h); return m ? {r:parseInt(m[1],16),g:parseInt(m[2],16),b:parseInt(m[3],16)} : {r:0,g:0,b:0}; }
 function lerpC(a,b,t) { return {r:a.r+(b.r-a.r)*t, g:a.g+(b.g-a.g)*t, b:a.b+(b.b-a.b)*t}; }
 function applyUrl() {
   const sp = new URLSearchParams(window.location.search);
   const seed = sp.get('seed'), algo = sp.get('algo');
-  if (algo === 'flowfield' || algo === 'harmonics') { curAlgo = algo; p = JSON.parse(JSON.stringify(DEF[algo])); }
+  if (algo === 'flowfield' || algo === 'harmonics' || algo === 'particles') { curAlgo = algo; p = JSON.parse(JSON.stringify(DEF[algo])); }
   if (seed && !isNaN(parseInt(seed,10))) p.seed = parseInt(seed,10);
   for (const [k,v] of sp.entries()) {
     if (k.startsWith('p_') && k.slice(2) in p) { const n = parseFloat(v); if (!isNaN(n)) p[k.slice(2)] = n; }
@@ -134,17 +146,21 @@ function setup() {
 }
 function draw() {
   if (needsRegen) { needsRegen = false; regen(); }
-  if (curAlgo === 'flowfield') drawFF(); else drawH();
+  if (curAlgo === 'flowfield') drawFF();
+  else if (curAlgo === 'particles') drawParticles();
+  else drawH();
   fpsAcc += deltaTime; fpsCnt++;
   if (millis() - lastFps > 500) {
     const avg = fpsAcc / fpsCnt;
-    document.getElementById('meta').textContent = 'algo: ' + (curAlgo === 'flowfield' ? 'Flow Field' : 'Harmonics') + ' | seed: ' + p.seed + ' | fps: ' + (avg > 0 ? Math.round(1000/avg) : 0);
+    document.getElementById('meta').textContent = 'algo: ' + (curAlgo === 'flowfield' ? 'Flow Field' : curAlgo === 'harmonics' ? 'Harmonics' : 'Particles') + ' | seed: ' + p.seed + ' | fps: ' + (avg > 0 ? Math.round(1000/avg) : 0);
     fpsAcc = 0; fpsCnt = 0; lastFps = millis();
   }
 }
 function regen() {
   randomSeed(p.seed); noiseSeed(p.seed);
-  if (curAlgo === 'flowfield') initFF(); else initH();
+  if (curAlgo === 'flowfield') initFF();
+  else if (curAlgo === 'particles') initParticles();
+  else initH();
   background(250, 249, 245);
 }
 function initFF() {
@@ -191,12 +207,6 @@ class Particle {
     line(this.prev.x, this.prev.y, this.pos.x, this.pos.y);
   }
 }
-function drawFF() {
-  noStroke(); fill(250, 249, 245, p.trailFade * 255); rect(0, 0, width, height);
-  for (let i=0; i<particles.length; i++) {
-    const pt = particles[i]; pt.follow(flowField); pt.update(); pt.display();
-  }
-}
 function initH() {
   const n = p.gridSize; hGrid = [];
   for (let y=0; y<n; y++) { hGrid[y] = []; for (let x=0; x<n; x++) {
@@ -204,6 +214,57 @@ function initH() {
   }}
   hT = 0;
   background(250, 249, 245);
+}
+function initParticles() {
+  sandParticles = [];
+  for (let i=0; i<p.particleCount; i++) sandParticles.push(new SandParticle());
+  background(250, 249, 245);
+}
+class SandParticle {
+  constructor() {
+    this.x = random(width);
+    this.y = random(height);
+    this.vx = random(-1, 1) * p.particleSpeed;
+    this.vy = random(-1, 1) * p.particleSpeed;
+    this.size = random(0.7, 1.5) * p.particleSize;
+    this.colorIdx = random() < 0.5 ? 0 : (random() < 0.8 ? 1 : 2);
+    this.seed = random(1000);
+  }
+  update() {
+    const wave = noise(this.x * 0.009, this.y * 0.009, this.seed + frameCount * 0.018 + p.seed * 0.001) * TAU * 2;
+    const force = p.spread * 0.18;
+    this.vx += cos(wave) * force + random(-p.drift, p.drift) * 0.12;
+    this.vy += sin(wave) * force + p.gravity * 0.12;
+    this.vx *= 0.94;
+    this.vy *= 0.95;
+    this.x += this.vx * p.particleSpeed;
+    this.y += this.vy * p.particleSpeed;
+    if (this.x < -10 || this.x > width + 10 || this.y < -10 || this.y > height + 10) this.respawn();
+  }
+  respawn() {
+    this.x = random(width);
+    this.y = random(height);
+    this.vx = random(-1, 1) * p.particleSpeed;
+    this.vy = random(-1, 1) * p.particleSpeed;
+    this.size = random(0.7, 1.5) * p.particleSize;
+    this.colorIdx = random() < 0.5 ? 0 : (random() < 0.8 ? 1 : 2);
+    this.seed = random(1000);
+  }
+  display() {
+    const cs = [p.c1, p.c2, p.c3];
+    const c = hexToRgb(cs[this.colorIdx]);
+    const speed = Math.hypot(this.vx, this.vy);
+    const alpha = map(speed, 0, p.particleSpeed * 2.2, 90, 200);
+    stroke(c.r, c.g, c.b, alpha);
+    strokeWeight(this.size);
+    point(this.x, this.y);
+  }
+}
+function drawFF() {
+  noStroke(); fill(250, 249, 245, p.trailFade * 255); rect(0, 0, width, height);
+  for (let i=0; i<particles.length; i++) {
+    const pt = particles[i]; pt.follow(flowField); pt.update(); pt.display();
+  }
 }
 function drawH() {
   noStroke(); fill(250, 249, 245, 25); rect(0, 0, width, height);
@@ -222,6 +283,13 @@ function drawH() {
     const al = 120 + amp * 100;
     fill(col.r, col.g, col.b, al);
     circle(x*cellW + cellW/2, y*cellW + cellW/2, r*2);
+  }
+}
+function drawParticles() {
+  noStroke(); fill(250, 249, 245, p.trailFade * 255); rect(0, 0, width, height);
+  for (let i=0; i<sandParticles.length; i++) {
+    sandParticles[i].update();
+    sandParticles[i].display();
   }
 }
 function syncUi() {
@@ -255,6 +323,9 @@ function onParam(k, v) {
   p[k] = n;
   document.getElementById('v-' + k).textContent = d.f(n);
   if (['particleCount','noiseOctaves','gridSize','frequency'].indexOf(k) !== -1) needsRegen = true;
+  if (['particleSize','particleSpeed','gravity','drift','spread','trailFade'].indexOf(k) !== -1) {
+    if (curAlgo === 'particles') needsRegen = true;
+  }
 }
 function onSeed() {
   const v = parseInt(document.getElementById('seed').value, 10);
